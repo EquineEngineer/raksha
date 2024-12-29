@@ -92,10 +92,10 @@ fn parse_text<'parse>(lexer: &mut Lexer<'parse, Token<'parse>>) -> TokenContent<
 #[derive(Logos, Debug, PartialEq)]
 #[logos(extras = Position)]
 enum Token<'parse> {
-    #[regex(r#"\n"#, parse_newline, priority = 999999999999999)]
+    #[regex(r#"\n"#, parse_newline)]
     Newline,
 
-    #[regex(r#"[ \t\r\f]+"#, parse_whitespace, priority = 999999999999999)]
+    #[regex(r#"[ \t\r\f]+"#, parse_whitespace)]
     Whitespace,
 
     #[regex(r#"\\[A-Za-z0-9]+"#, parse_shortcut)]
