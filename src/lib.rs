@@ -404,7 +404,7 @@ fn inspect(el: &Element) -> String {
 
 /// A Python module implemented in Rust.
 #[pymodule]
-fn parser(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn raksha(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse, m)?)?;
     m.add_function(wrap_pyfunction!(inspect, m)?)?;
     Ok(())
