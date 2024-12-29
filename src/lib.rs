@@ -1,57 +1,120 @@
 use pyo3::prelude::*;
 
-use logos::{Lexer, Logos};
+use logos::{Lexer, Logos, Skip};
 use std::fmt::Display;
 use std::str::FromStr;
 use strum::EnumString;
 
-fn parse_shortcut<'parse>(lexer: &mut Lexer<'parse, Token<'parse>>) -> &'parse str {
-    lexer.slice().trim_start_matches("\\")
+type Position = (usize, usize);
+
+#[derive(Debug, PartialEq)]
+struct TokenContent<'parse> {
+    text: &'parse str,
+    position: Position,
 }
 
-fn parse_enclosed_shortcut<'parse>(lexer: &mut Lexer<'parse, Token<'parse>>) -> &'parse str {
-    lexer
+fn parse_newline<'parse>(lexer: &mut Lexer<'parse, Token<'parse>>) {
+    lexer.extras.0 += 1;
+    lexer.extras.1 = lexer.span().end;
+}
+
+fn parse_whitespace<'parse>(_: &mut Lexer<'parse, Token<'parse>>) -> Skip {
+    Skip
+}
+
+fn parse_shortcut<'parse>(lexer: &mut Lexer<'parse, Token<'parse>>) -> TokenContent<'parse> {
+    let text = lexer.slice().trim_start_matches("\\");
+
+    let line = lexer.extras.0 + 1;
+    let column = lexer.span().start - lexer.extras.1 + 1;
+    let position = (line, column);
+
+    TokenContent { text, position }
+}
+
+fn parse_enclosed_shortcut<'parse>(
+    lexer: &mut Lexer<'parse, Token<'parse>>,
+) -> TokenContent<'parse> {
+    let text = lexer
         .slice()
         .trim_start_matches("\\")
-        .trim_end_matches("\\")
+        .trim_end_matches("\\");
+
+    let line = lexer.extras.0 + 1;
+    let column = lexer.span().start - lexer.extras.1 + 1;
+    let position = (line, column);
+
+    TokenContent { text, position }
 }
 
-fn parse_open_tag<'parse>(lexer: &mut Lexer<'parse, Token<'parse>>) -> &'parse str {
-    lexer.slice().trim_start_matches("<").trim_end_matches(">")
+fn parse_open_tag<'parse>(lexer: &mut Lexer<'parse, Token<'parse>>) -> TokenContent<'parse> {
+    let text = lexer.slice().trim_start_matches("<").trim_end_matches(">");
+
+    let line = lexer.extras.0 + 1;
+    let column = lexer.span().start - lexer.extras.1 + 1;
+    let position = (line, column);
+
+    TokenContent { text, position }
 }
 
-fn parse_close_tag<'parse>(lexer: &mut Lexer<'parse, Token<'parse>>) -> &'parse str {
-    lexer.slice().trim_start_matches("</").trim_end_matches(">")
+fn parse_close_tag<'parse>(lexer: &mut Lexer<'parse, Token<'parse>>) -> TokenContent<'parse> {
+    let text = lexer.slice().trim_start_matches("</").trim_end_matches(">");
+
+    let line = lexer.extras.0 + 1;
+    let column = lexer.span().start - lexer.extras.1 + 1;
+    let position = (line, column);
+
+    TokenContent { text, position }
 }
 
-fn parse_self_closing_tag<'parse>(lexer: &mut Lexer<'parse, Token<'parse>>) -> &'parse str {
-    lexer.slice().trim_start_matches("<").trim_end_matches("/>")
+fn parse_self_closing_tag<'parse>(
+    lexer: &mut Lexer<'parse, Token<'parse>>,
+) -> TokenContent<'parse> {
+    let text = lexer.slice().trim_start_matches("<").trim_end_matches("/>");
+
+    let line = lexer.extras.0 + 1;
+    let column = lexer.span().start - lexer.extras.1 + 1;
+    let position = (line, column);
+
+    TokenContent { text, position }
 }
 
-fn parse_text<'parse>(lexer: &mut Lexer<'parse, Token<'parse>>) -> &'parse str {
-    lexer.slice()
+fn parse_text<'parse>(lexer: &mut Lexer<'parse, Token<'parse>>) -> TokenContent<'parse> {
+    let text = lexer.slice();
+
+    let line = lexer.extras.0 + 1;
+    let column = lexer.span().start - lexer.extras.1 + 1;
+    let position = (line, column);
+
+    TokenContent { text, position }
 }
 
 #[derive(Logos, Debug, PartialEq)]
-#[logos(skip r"[ \t\r\n\f]+")]
+#[logos(extras = Position)]
 enum Token<'parse> {
+    #[regex(r#"\n"#, parse_newline, priority = 999999999999999)]
+    Newline,
+
+    #[regex(r#"[ \t\r\f]+"#, parse_whitespace, priority = 999999999999999)]
+    Whitespace,
+
     #[regex(r#"\\[A-Za-z0-9]+"#, parse_shortcut)]
-    Shortcut(&'parse str),
+    Shortcut(TokenContent<'parse>),
 
     #[regex(r#"\\[A-Za-z0-9]+\\"#, parse_enclosed_shortcut)]
-    EnclosedShortcut(&'parse str),
+    EnclosedShortcut(TokenContent<'parse>),
 
     #[regex(r#"<[A-Za-z0-9]+>"#, parse_open_tag)]
-    OpenTag(&'parse str),
+    OpenTag(TokenContent<'parse>),
 
     #[regex(r#"</[A-Za-z0-9]+>"#, parse_close_tag)]
-    CloseTag(&'parse str),
+    CloseTag(TokenContent<'parse>),
 
     #[regex(r#"<[A-Za-z0-9]+/>"#, parse_self_closing_tag)]
-    SelfClosingTag(&'parse str),
+    SelfClosingTag(TokenContent<'parse>),
 
-    #[regex(r#"([^<^"\\]|\\["\\bnfrt]|u[a-fA-F0-9]{4})*"#, parse_text)]
-    Text(&'parse str),
+    #[regex(r#"([^\n^<^"\\]|\\["\\bnfrt]|u[a-fA-F0-9]{4})*"#, parse_text)]
+    Text(TokenContent<'parse>),
 }
 
 #[derive(Debug, PartialEq)]
@@ -129,6 +192,7 @@ enum Value {
     Shortcut(Shortcut),
     Tag(Tag),
     Text(String),
+    Newline,
 }
 
 impl Display for Value {
@@ -137,6 +201,7 @@ impl Display for Value {
             Value::Shortcut(shortcut) => write!(f, "{}", shortcut),
             Value::Tag(tag) => write!(f, "{}", tag),
             Value::Text(text) => write!(f, "{}", text),
+            Value::Newline => write!(f, "\n"),
         }
     }
 }
@@ -146,29 +211,76 @@ impl<'parse> TryFrom<Token<'parse>> for Value {
 
     fn try_from(value: Token<'parse>) -> Result<Self, Self::Error> {
         match value {
-            Token::Shortcut(shortcut) => Ok(Value::Shortcut(Shortcut {
-                kind: ShortcutKind::Prefixed,
-                inner: Shortcuts::from_str(shortcut)
-                    .map_err(|er| format!("{}; {}", er, shortcut))?,
-            })),
-            Token::EnclosedShortcut(shortcut) => Ok(Value::Shortcut(Shortcut {
-                kind: ShortcutKind::Enclosed,
-                inner: Shortcuts::from_str(shortcut)
-                    .map_err(|er| format!("{}; {}", er, shortcut))?,
-            })),
-            Token::OpenTag(tag) => Ok(Value::Tag(Tag {
-                kind: TagKind::Open,
-                inner: Tags::from_str(tag).map_err(|er| format!("{}; {}", er, tag))?,
-            })),
-            Token::CloseTag(tag) => Ok(Value::Tag(Tag {
-                kind: TagKind::Close,
-                inner: Tags::from_str(tag).map_err(|er| format!("{}; {}", er, tag))?,
-            })),
-            Token::SelfClosingTag(tag) => Ok(Value::Tag(Tag {
-                kind: TagKind::SelfClosing,
-                inner: Tags::from_str(tag).map_err(|er| format!("{}; {}", er, tag))?,
-            })),
-            Token::Text(text) => Ok(Value::Text(String::from(text))),
+            Token::Shortcut(shortcut) => {
+                println!(
+                    "shortcut: {} at {}:{}",
+                    shortcut.text, shortcut.position.0, shortcut.position.1
+                );
+
+                Ok(Value::Shortcut(Shortcut {
+                    kind: ShortcutKind::Prefixed,
+                    inner: Shortcuts::from_str(shortcut.text)
+                        .map_err(|er| format!("{}; {}", er, shortcut.text))?,
+                }))
+            }
+            Token::EnclosedShortcut(shortcut) => {
+                println!(
+                    "enclosed shortcut: {} at {}:{}",
+                    shortcut.text, shortcut.position.0, shortcut.position.1
+                );
+
+                Ok(Value::Shortcut(Shortcut {
+                    kind: ShortcutKind::Enclosed,
+                    inner: Shortcuts::from_str(shortcut.text)
+                        .map_err(|er| format!("{}; {}", er, shortcut.text))?,
+                }))
+            }
+            Token::OpenTag(tag) => {
+                println!(
+                    "open tag: {} at {}:{}",
+                    tag.text, tag.position.0, tag.position.1
+                );
+
+                Ok(Value::Tag(Tag {
+                    kind: TagKind::Open,
+                    inner: Tags::from_str(tag.text)
+                        .map_err(|er| format!("{}; {}", er, tag.text))?,
+                }))
+            }
+            Token::CloseTag(tag) => {
+                println!(
+                    "close tag: {} at {}:{}",
+                    tag.text, tag.position.0, tag.position.1
+                );
+
+                Ok(Value::Tag(Tag {
+                    kind: TagKind::Close,
+                    inner: Tags::from_str(tag.text)
+                        .map_err(|er| format!("{}; {}", er, tag.text))?,
+                }))
+            }
+            Token::SelfClosingTag(tag) => {
+                println!(
+                    "self closing tag: {} at {}:{}",
+                    tag.text, tag.position.0, tag.position.1
+                );
+
+                Ok(Value::Tag(Tag {
+                    kind: TagKind::SelfClosing,
+                    inner: Tags::from_str(tag.text)
+                        .map_err(|er| format!("{}; {}", er, tag.text))?,
+                }))
+            }
+            Token::Text(text) => {
+                println!(
+                    "text: {} at {}:{}",
+                    text.text, text.position.0, text.position.1
+                );
+
+                Ok(Value::Text(String::from(text.text)))
+            }
+            Token::Newline => Ok(Value::Newline),
+            _ => unreachable!("Logos will not yield `SKIP` tokens"),
         }
     }
 }
@@ -199,7 +311,7 @@ impl<'parse> From<&'parse str> for Iter<'parse> {
 /// For tags that have node children
 #[derive(Debug, PartialEq)]
 #[pyclass]
-struct Element {
+pub struct Element {
     root: Tags,
     children: Vec<DomChild>,
 }
@@ -280,25 +392,47 @@ impl Element {
     }
 }
 
-#[pyclass]
-struct Parser {}
+#[pyfunction]
+fn parse(input: &str) -> Option<Element> {
+    Element::populate(input)
+}
 
-#[pymethods]
-impl Parser {
-    #[staticmethod]
-    fn parse(input: &str) -> Option<Element> {
-        Element::populate(input)
-    }
-
-    #[staticmethod]
-    fn inspect(el: &Element) -> String {
-        format!("{:#?}", el)
-    }
+#[pyfunction]
+fn inspect(el: &Element) -> String {
+    format!("{:#?}", el)
 }
 
 /// A Python module implemented in Rust.
 #[pymodule]
-fn raksha(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<Parser>()?;
+fn parser(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(parse, m)?)?;
+    m.add_function(wrap_pyfunction!(inspect, m)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test() {
+        let input = r#"<START>
+
+<TEXT> blablabla  blablabla blabla  bliblibli bliblibli blibli|</TEXT>
+        <APP>\va <LEM>blabla</LEM> \msCa; bloblu \msCb</APP>
+        <PARAL>\vab \similar\ \BhG\ 10.12ab$</PARAL>
+        <NOTE>So this is a short 
+        note...</NOTE>
+        <TR>This is the beginning of the translation...</TR>
+
+<TEXT> blobloblo  blobloblo bloblo  blublublublu blubluṃ blublu||</TEXT>
+        <APP>\vd <LEM>blubluṃ</LEM> \msCa; bloblumda \msCb</APP>
+        <TR>... and then it contimues.ह</TR>
+
+</START>"#;
+
+        let dom = Element::populate(input).unwrap();
+
+        println!("{:#?}", dom);
+    }
 }

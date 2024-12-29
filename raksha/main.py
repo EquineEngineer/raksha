@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from raksha import Parser
+from raksha.raksha import Parser
 
 input = r"""
 <START>

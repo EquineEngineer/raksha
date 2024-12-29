@@ -3,7 +3,8 @@
 <TEXT> blablabla  blablabla blabla  bliblibli bliblibli blibli|</TEXT>
         <APP>\va <LEM>blabla</LEM> \msCa; bloblu \msCb</APP>
         <PARAL>\vab \similar\ \BhG\ 10.12ab$</PARAL>
-        <NOTE>So this is a short note...</NOTE>
+        <NOTE>So this is a short 
+        note...</NOTE>
         <TR>This is the beginning of the translation...</TR>
 
 <TEXT> blobloblo  blobloblo bloblo  blublublublu blubluṃ blublu||</TEXT>
