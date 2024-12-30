@@ -1,9 +1,18 @@
-use pyo3::prelude::*;
-
-use logos::{Lexer, Logos, Skip};
-use std::fmt::Display;
-use std::str::FromStr;
+use logos::{
+    Lexer,
+    Logos,
+    Skip,
+};
+use pyo3::{
+    exceptions::PyValueError,
+    prelude::*,
+};
+use std::{
+    fmt::Display,
+    str::FromStr,
+};
 use strum::EnumString;
+use thiserror::Error;
 
 type Position = (usize, usize);
 
@@ -22,7 +31,9 @@ fn parse_whitespace<'parse>(_: &mut Lexer<'parse, Token<'parse>>) -> Skip {
     Skip
 }
 
-fn parse_shortcut<'parse>(lexer: &mut Lexer<'parse, Token<'parse>>) -> TokenContent<'parse> {
+fn parse_shortcut<'parse>(
+    lexer: &mut Lexer<'parse, Token<'parse>>,
+) -> TokenContent<'parse> {
     let text = lexer.slice().trim_start_matches("\\");
 
     let line = lexer.extras.0 + 1;
@@ -47,7 +58,9 @@ fn parse_enclosed_shortcut<'parse>(
     TokenContent { text, position }
 }
 
-fn parse_open_tag<'parse>(lexer: &mut Lexer<'parse, Token<'parse>>) -> TokenContent<'parse> {
+fn parse_open_tag<'parse>(
+    lexer: &mut Lexer<'parse, Token<'parse>>,
+) -> TokenContent<'parse> {
     let text = lexer.slice().trim_start_matches("<").trim_end_matches(">");
 
     let line = lexer.extras.0 + 1;
@@ -57,7 +70,9 @@ fn parse_open_tag<'parse>(lexer: &mut Lexer<'parse, Token<'parse>>) -> TokenCont
     TokenContent { text, position }
 }
 
-fn parse_close_tag<'parse>(lexer: &mut Lexer<'parse, Token<'parse>>) -> TokenContent<'parse> {
+fn parse_close_tag<'parse>(
+    lexer: &mut Lexer<'parse, Token<'parse>>,
+) -> TokenContent<'parse> {
     let text = lexer.slice().trim_start_matches("</").trim_end_matches(">");
 
     let line = lexer.extras.0 + 1;
@@ -79,7 +94,9 @@ fn parse_self_closing_tag<'parse>(
     TokenContent { text, position }
 }
 
-fn parse_text<'parse>(lexer: &mut Lexer<'parse, Token<'parse>>) -> TokenContent<'parse> {
+fn parse_text<'parse>(
+    lexer: &mut Lexer<'parse, Token<'parse>>,
+) -> TokenContent<'parse> {
     let text = lexer.slice();
 
     let line = lexer.extras.0 + 1;
@@ -117,13 +134,13 @@ enum Token<'parse> {
     Text(TokenContent<'parse>),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 enum ShortcutKind {
     Prefixed,
     Enclosed,
 }
 
-#[derive(EnumString, Debug, PartialEq)]
+#[derive(EnumString, Debug, PartialEq, Clone)]
 #[strum(ascii_case_insensitive)]
 enum Shortcuts {
     Va,
@@ -136,7 +153,8 @@ enum Shortcuts {
     Vd,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
+#[pyclass]
 struct Shortcut {
     kind: ShortcutKind,
     inner: Shortcuts,
@@ -172,6 +190,7 @@ enum Tags {
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
+#[pyclass]
 struct Tag {
     kind: TagKind,
     inner: Tags,
@@ -187,12 +206,13 @@ impl Display for Tag {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
+#[pyclass]
 enum Value {
     Shortcut(Shortcut),
     Tag(Tag),
     Text(String),
-    Newline,
+    Newline(),
 }
 
 impl Display for Value {
@@ -201,85 +221,114 @@ impl Display for Value {
             Value::Shortcut(shortcut) => write!(f, "{}", shortcut),
             Value::Tag(tag) => write!(f, "{}", tag),
             Value::Text(text) => write!(f, "{}", text),
-            Value::Newline => write!(f, "\n"),
+            Value::Newline() => write!(f, "\n"),
         }
     }
 }
 
+#[derive(Debug, Error)]
+#[pyclass]
+enum RakshaError {
+    #[error("Could not parse input at {0:?}:{1:?} as {2:?}")]
+    Parse(usize, usize, String),
+
+    #[error("An empty tree is not allowed")]
+    EmptyTree(),
+
+    #[error("Tree doesn't begin with a root node. Found {0:?} instead")]
+    NoRoot(Value),
+}
+
+impl From<RakshaError> for PyErr {
+    fn from(value: RakshaError) -> Self {
+        PyValueError::new_err(value.to_string())
+    }
+}
+
 impl<'parse> TryFrom<Token<'parse>> for Value {
-    type Error = String;
+    type Error = RakshaError;
 
     fn try_from(value: Token<'parse>) -> Result<Self, Self::Error> {
         match value {
             Token::Shortcut(shortcut) => {
-                println!(
-                    "shortcut: {} at {}:{}",
-                    shortcut.text, shortcut.position.0, shortcut.position.1
-                );
+                let Ok(shortcut) = Shortcuts::from_str(shortcut.text) else {
+                    return Err(RakshaError::Parse(
+                        shortcut.position.0,
+                        shortcut.position.1,
+                        "Shortcut".to_string(),
+                    ));
+                };
 
                 Ok(Value::Shortcut(Shortcut {
                     kind: ShortcutKind::Prefixed,
-                    inner: Shortcuts::from_str(shortcut.text)
-                        .map_err(|er| format!("{}; {}", er, shortcut.text))?,
+                    inner: shortcut,
                 }))
             }
+
             Token::EnclosedShortcut(shortcut) => {
-                println!(
-                    "enclosed shortcut: {} at {}:{}",
-                    shortcut.text, shortcut.position.0, shortcut.position.1
-                );
+                let Ok(shortcut) = Shortcuts::from_str(shortcut.text) else {
+                    return Err(RakshaError::Parse(
+                        shortcut.position.0,
+                        shortcut.position.1,
+                        "Shortcut".to_string(),
+                    ));
+                };
 
                 Ok(Value::Shortcut(Shortcut {
                     kind: ShortcutKind::Enclosed,
-                    inner: Shortcuts::from_str(shortcut.text)
-                        .map_err(|er| format!("{}; {}", er, shortcut.text))?,
+                    inner: shortcut,
                 }))
             }
+
             Token::OpenTag(tag) => {
-                println!(
-                    "open tag: {} at {}:{}",
-                    tag.text, tag.position.0, tag.position.1
-                );
+                let Ok(tag) = Tags::from_str(tag.text) else {
+                    return Err(RakshaError::Parse(
+                        tag.position.0,
+                        tag.position.1,
+                        "Tag".to_string(),
+                    ));
+                };
 
                 Ok(Value::Tag(Tag {
                     kind: TagKind::Open,
-                    inner: Tags::from_str(tag.text)
-                        .map_err(|er| format!("{}; {}", er, tag.text))?,
+                    inner: tag,
                 }))
             }
+
             Token::CloseTag(tag) => {
-                println!(
-                    "close tag: {} at {}:{}",
-                    tag.text, tag.position.0, tag.position.1
-                );
+                let Ok(tag) = Tags::from_str(tag.text) else {
+                    return Err(RakshaError::Parse(
+                        tag.position.0,
+                        tag.position.1,
+                        "Tag".to_string(),
+                    ));
+                };
 
                 Ok(Value::Tag(Tag {
                     kind: TagKind::Close,
-                    inner: Tags::from_str(tag.text)
-                        .map_err(|er| format!("{}; {}", er, tag.text))?,
+                    inner: tag,
                 }))
             }
+
             Token::SelfClosingTag(tag) => {
-                println!(
-                    "self closing tag: {} at {}:{}",
-                    tag.text, tag.position.0, tag.position.1
-                );
+                let Ok(tag) = Tags::from_str(tag.text) else {
+                    return Err(RakshaError::Parse(
+                        tag.position.0,
+                        tag.position.1,
+                        "Tag".to_string(),
+                    ));
+                };
 
                 Ok(Value::Tag(Tag {
                     kind: TagKind::SelfClosing,
-                    inner: Tags::from_str(tag.text)
-                        .map_err(|er| format!("{}; {}", er, tag.text))?,
+                    inner: tag,
                 }))
             }
-            Token::Text(text) => {
-                println!(
-                    "text: {} at {}:{}",
-                    text.text, text.position.0, text.position.1
-                );
 
-                Ok(Value::Text(String::from(text.text)))
-            }
-            Token::Newline => Ok(Value::Newline),
+            Token::Text(content) => Ok(Value::Text(String::from(content.text))),
+
+            Token::Newline => Ok(Value::Newline()),
+
             _ => unreachable!("Logos will not yield `SKIP` tokens"),
         }
     }
@@ -290,11 +339,11 @@ struct Iter<'parse> {
 }
 
 impl<'parse> std::iter::Iterator for Iter<'parse> {
-    type Item = Value;
+    type Item = Result<Value, RakshaError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.lexer.next() {
-            Some(Ok(token)) => Value::try_from(token).ok(),
+            Some(Ok(token)) => Some(Value::try_from(token)),
             _ => None,
         }
     }
@@ -311,19 +360,35 @@ impl<'parse> From<&'parse str> for Iter<'parse> {
 /// For tags that have node children
 #[derive(Debug, PartialEq)]
 #[pyclass]
-pub struct Element {
+pub struct DOM {
     root: Tags,
     children: Vec<DomChild>,
+}
+
+#[pymethods]
+impl DOM {
+    fn __repr__(&self) -> String {
+        format!("DOM({:#?})", self)
+    }
+
+    fn __str__(&self) -> String {
+        format!("{:?}", self)
+    }
+
+    #[staticmethod]
+    fn parse(input: &str) -> Result<DOM, RakshaError> {
+        DOM::populate(input)
+    }
 }
 
 /// Either a childless or a regular Element node
 #[derive(Debug, PartialEq)]
 enum DomChild {
     Leaf(Value),
-    Node(Element),
+    Node(DOM),
 }
 
-impl Element {
+impl DOM {
     fn new(tag: Tags) -> Self {
         Self {
             root: tag,
@@ -335,42 +400,53 @@ impl Element {
         self.children.push(value);
     }
 
-    fn populate<'parse>(input: &'parse str) -> Option<Self> {
+    fn populate<'parse>(input: &'parse str) -> Result<DOM, RakshaError> {
         let mut lexer = Iter::from(input);
 
-        let Some(val) = lexer.next() else { return None };
+        let Some(maybe_val) = lexer.next() else {
+            return Err(RakshaError::EmptyTree());
+        };
+
+        let val = match maybe_val {
+            Ok(val) => val,
+            Err(e) => return Err(e),
+        };
 
         let mut dom = match val {
             Value::Tag(tag) => Self::new(tag.inner),
             _ => {
-                return None;
+                return Err(RakshaError::NoRoot(val));
             }
         };
 
         while let Some(value) = lexer.next() {
             match value {
-                Value::Tag(tag) => match tag.kind {
+                Ok(Value::Tag(tag)) => match tag.kind {
                     TagKind::Close => {}
                     _ => {
-                        let child_node = Self::populate_from(&mut lexer, tag);
+                        let child_node = Self::populate_from(&mut lexer, tag)?;
                         dom.append(child_node);
                     }
                 },
-                other => dom.append(DomChild::Leaf(other)),
+                Ok(other) => dom.append(DomChild::Leaf(other)),
+                Err(e) => return Err(e),
             }
         }
 
-        Some(dom)
+        Ok(dom)
     }
 
-    fn populate_from<'parse>(lexer: &mut Iter<'parse>, root: Tag) -> DomChild {
+    fn populate_from<'parse>(
+        lexer: &mut Iter<'parse>,
+        root: Tag,
+    ) -> Result<DomChild, RakshaError> {
         let mut dom = Self::new(root.inner);
 
         while let Some(value) = lexer.next() {
             match value {
-                Value::Tag(tag) => match tag.kind {
+                Ok(Value::Tag(tag)) => match tag.kind {
                     TagKind::Open => {
-                        let child_node = Self::populate_from(lexer, tag);
+                        let child_node = Self::populate_from(lexer, tag)?;
                         dom.append(child_node);
                     }
                     TagKind::SelfClosing => {
@@ -378,35 +454,25 @@ impl Element {
                     }
                     TagKind::Close => {
                         if tag.inner == root.inner {
-                            return DomChild::Node(dom);
+                            return Ok(DomChild::Node(dom));
                         } else {
                             panic!("Tag mismatch: {} != {}", tag, root);
                         }
                     }
                 },
-                other => dom.append(DomChild::Leaf(other)),
+                Ok(other) => dom.append(DomChild::Leaf(other)),
+                Err(e) => return Err(e),
             }
         }
 
-        DomChild::Node(dom)
+        Ok(DomChild::Node(dom))
     }
-}
-
-#[pyfunction]
-fn parse(input: &str) -> Option<Element> {
-    Element::populate(input)
-}
-
-#[pyfunction]
-fn inspect(el: &Element) -> String {
-    format!("{:#?}", el)
 }
 
 /// A Python module implemented in Rust.
 #[pymodule]
 fn raksha(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(parse, m)?)?;
-    m.add_function(wrap_pyfunction!(inspect, m)?)?;
+    m.add_class::<DOM>()?;
     Ok(())
 }
 
@@ -429,9 +495,10 @@ mod test {
         <APP>\vd <LEM>blubluṃ</LEM> \msCa; bloblumda \msCb</APP>
         <TR>... and then it contimues.ह</TR>
 
-</START>"#;
+</START>"#
+            .trim();
 
-        let dom = Element::populate(input).unwrap();
+        let dom = DOM::populate(input).unwrap();
 
         println!("{:#?}", dom);
     }
